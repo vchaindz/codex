@@ -64,58 +64,6 @@ impl HistoryCell for FileCell {
     }
 }
 
-/// A provider's styled tree, the format a status line provider sends, laid out at the sidebar's width.
-#[derive(Debug)]
-struct TreeCell {
-    source: String,
-    tree: crate::ui_tree::PreparedUiTree,
-}
-
-impl HistoryCell for TreeCell {
-    fn copy_source(&self) -> Option<&str> {
-        Some(&self.source)
-    }
-
-    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let size = self.tree.measure(ratatui::layout::Size::new(width, u16::MAX));
-        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        crate::render::highlight::with_syntax_theme(|theme| {
-            self.tree.render(area, theme, &mut buf, /*plain_style*/ None);
-        });
-        (0..size.height)
-            .map(|y| {
-                let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
-                let mut x = 0;
-                while x < size.width {
-                    let cell = &buf[(x, y)];
-                    let style = cell.style();
-                    // shortcut: a link cell carries its OSC 8 escape; keep its text and drop the link, make TreeCell a hyperlink cell if providers need clickable links.
-                    let symbol = crate::ui_tree::sanitize_leaf(cell.symbol().to_owned());
-                    // A wide symbol covers the cells after it.
-                    x += unicode_width::UnicodeWidthStr::width(symbol.as_str()).max(1) as u16;
-                    match spans.last_mut() {
-                        Some(span) if span.style == style => span.content.to_mut().push_str(&symbol),
-                        _ => spans.push(ratatui::text::Span::styled(symbol, style)),
-                    }
-                }
-                // The buffer is as wide as the widest line; shorter lines end in unpainted cells.
-                if let Some(last) = spans.last_mut()
-                    && last.style.bg.is_none_or(|bg| bg == ratatui::style::Color::Reset)
-                {
-                    let end = last.content.trim_end().len();
-                    last.content.to_mut().truncate(end);
-                }
-                Line::from(spans)
-            })
-            .collect()
-    }
-
-    fn raw_lines(&self) -> Vec<Line<'static>> {
-        crate::history_cell::raw_lines_from_source(&self.source)
-    }
-}
-
 pub(super) struct DocumentRenderOptions<'a> {
     pub(super) motion: MotionMode,
     pub(super) frames: &'a tui::FrameRequester,
@@ -133,6 +81,9 @@ pub(super) struct Document {
     state: State,
     /// Set for an MCP sidebar entrypoint: its tab name, and Markdown whatever the name says.
     pub(super) label: Option<String>,
+    /// The MCP server behind an entrypoint tab, which the panel's actions call.
+    pub(super) server: Option<String>,
+    actions: Vec<super::sidebar_panel::PanelAction>,
     // Dropping the document stops its resource polling.
     _poll: Option<tokio_util::sync::DropGuard>,
 }
@@ -205,12 +156,11 @@ impl Document {
             Ok(DocumentContent::Text(source))
                 if self.label.is_some() && source.trim_start().starts_with('{') =>
             {
-                match source.parse::<crate::ui_tree::UiTree>() {
-                    Ok(tree) => {
-                        let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(TreeCell {
-                            source,
-                            tree: tree.prepare(),
-                        })];
+                match super::sidebar_panel::parse(&source) {
+                    Ok(root) => {
+                        self.actions = root.actions();
+                        let cells: [Arc<dyn HistoryCell>; 1] =
+                            [Arc::new(super::sidebar_panel::PanelCell { source, root })];
                         let mut view = Box::<TranscriptView>::default();
                         view.show_follow_control = false;
                         view.jump_to_offset(&cells, 0);
@@ -221,7 +171,7 @@ impl Document {
                             target: None,
                         }
                     }
-                    Err(error) => State::Failed(format!("Unreadable sidebar tree: {error}")),
+                    Err(error) => State::Failed(error),
                 }
             }
             Ok(DocumentContent::Text(source)) => {
@@ -605,6 +555,8 @@ impl App {
                 location,
                 state: State::Loading(Instant::now()),
                 label: None,
+                server: None,
+                actions: Vec::new(),
                 _poll: None,
             },
         );
@@ -661,7 +613,11 @@ impl App {
     ) {
         if !self.config.features.enabled(Feature::TuiExtensionsSidebar)
             || std::mem::replace(
-                &mut self.sidebars.entry(Some(parent)).or_default().extensions_requested,
+                &mut self
+                    .sidebars
+                    .entry(Some(parent))
+                    .or_default()
+                    .extensions_requested,
                 true,
             )
         {
@@ -719,6 +675,8 @@ impl App {
                     location: None,
                     state: State::Loading(Instant::now()),
                     label: Some(provider.title.clone()),
+                    server: Some(provider.id.server.as_str().to_owned()),
+                    actions: Vec::new(),
                     _poll: Some(cancel.clone().drop_guard()),
                 },
             );
@@ -757,6 +715,49 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    /// A prompt is drafted in the composer, which takes focus back; a tool runs on the provider's server.
+    fn run_panel_action(
+        &mut self,
+        server: &AppServerSession,
+        id: uuid::Uuid,
+        provider: Option<String>,
+        action: super::sidebar_panel::PanelAction,
+    ) {
+        if let Some(prompt) = &action.prompt {
+            self.chat_widget.insert_str(prompt);
+            self.sidebar_mut()
+                .show(SidebarContent::Document(id), PaneFocus::Main);
+        }
+        let (Some(tool), Some(provider), Some(parent)) =
+            (action.tool, provider, self.sidebar_parent())
+        else {
+            return;
+        };
+        let client = server.request_handle();
+        tokio::spawn(async move {
+            let call: Result<codex_app_server_protocol::McpServerToolCallResponse, _> = client
+                .request_typed(
+                    codex_app_server_protocol::ClientRequest::McpServerToolCall {
+                        request_id: codex_app_server_protocol::RequestId::String(
+                            uuid::Uuid::new_v4().to_string(),
+                        ),
+                        params: codex_app_server_protocol::McpServerToolCallParams {
+                            thread_id: parent.to_string(),
+                            server: provider,
+                            environment_id: None,
+                            tool,
+                            arguments: action.arguments,
+                            meta: None,
+                        },
+                    },
+                )
+                .await;
+            if let Err(error) = call {
+                tracing::warn!("sidebar panel action failed: {error:#}");
+            }
+        });
+    }
+
     pub(super) async fn handle_document_input(
         &mut self,
         tui: &mut tui::Tui,
@@ -793,6 +794,20 @@ impl App {
                     return true;
                 };
                 if doc.backend != server.backend_id() {
+                    return true;
+                }
+                if let KeyCode::Char(ch) = key.code
+                    && key.kind == KeyEventKind::Press
+                    && !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    && !matches!(&doc.state, State::Ready { view, .. } if view.has_active_interaction())
+                    && let Some(action) =
+                        doc.actions.iter().find(|action| action.key == ch).cloned()
+                {
+                    let provider = doc.server.clone();
+                    self.run_panel_action(server, id, provider, action);
+                    tui.frame_requester().schedule_frame();
                     return true;
                 }
                 let escape = crate::key_hint::plain(KeyCode::Esc).is_press(*key);
