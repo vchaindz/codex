@@ -100,3 +100,37 @@ fn an_oversized_or_unknown_panel_is_refused() {
     assert!(parse(r#"{"type":"gauge","label":"a","ratio":1,"extra":1}"#).is_err());
     assert!(parse(r#"{"type":"video","src":"x"}"#).is_err());
 }
+
+#[test]
+fn reader_keys_stay_with_the_reader_and_text_keeps_the_status_line_limits() {
+    let root = parse(
+        r#"{"type":"panel","children":[
+            {"type":"action","key":"j","label":"scroll","tool":"t"},
+            {"type":"action","key":"/","label":"find","tool":"t"},
+            {"type":"action","key":"i","label":"look","prompt":"p"}]}"#,
+    )
+    .expect("panel");
+    assert_eq!(
+        root.actions().iter().map(|a| a.key).collect::<String>(),
+        "i"
+    );
+    let deep = (0..20).fold(r#""x""#.to_string(), |inner, _| {
+        format!(r#"{{"type":"bold","children":[{inner}]}}"#)
+    });
+    assert!(parse(&format!(r#"{{"type":"panel","children":[{deep}]}}"#)).is_err());
+    let lines = render(
+        &format!(r#"{{"type":"text","children":["{}"]}}"#, "\\n".repeat(4000)),
+        20,
+    );
+    assert!(lines.len() <= usize::from(MAX_TEXT_ROWS));
+}
+
+#[test]
+fn a_wide_box_title_keeps_the_border_inside_the_panel() {
+    let lines = render(r#"{"type":"box","title":"界界界界","children":[]}"#, 20);
+    assert!(
+        lines.iter().all(|line| line.width() <= 20),
+        "{:?}",
+        text(&lines)
+    );
+}

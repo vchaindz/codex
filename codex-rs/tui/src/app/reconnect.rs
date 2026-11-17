@@ -419,6 +419,17 @@ impl App {
         *app_event_rx = rx;
         for pane in self.sidebars.values_mut() {
             pane.focus_document_request = None;
+            // Provider tabs poll through the old connection; drop them so discovery rebuilds them.
+            let providers: Vec<_> = pane
+                .documents
+                .iter()
+                .filter_map(|(id, doc)| doc.label.is_some().then_some(*id))
+                .collect();
+            for id in providers {
+                pane.remove_document(id);
+            }
+            pane.extensions_found = false;
+            pane.extensions_checked = None;
             for doc in pane.documents.values_mut() {
                 doc.connection_replaced();
             }

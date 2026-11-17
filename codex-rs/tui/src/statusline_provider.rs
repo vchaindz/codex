@@ -200,25 +200,36 @@ impl ResolvedStatuslineProvider {
         &self,
         snapshot: Value,
     ) -> Result<McpResourceReadResponse, codex_app_server_client::TypedRequestError> {
-        let provider = &self.provider;
         self.client
-            .request_typed(ClientRequest::McpResourceRead {
-                request_id: RequestId::String(Uuid::new_v4().to_string()),
-                params: McpResourceReadParams {
-                    thread_id: Some(self.thread.to_string()),
-                    server: provider.id.server.0.clone(),
-                    environment_id: None,
-                    uri: provider.uri.clone(),
-                    connector_id: None,
-                    origin_call_id: None,
-                    target: None,
-                    meta: Some(serde_json::Map::from_iter([(
-                        "com.openai/codex-statusline-state".into(),
-                        snapshot,
-                    )])),
-                },
-            })
+            .request_typed(resource_read(
+                &self.provider,
+                self.thread,
+                "com.openai/codex-statusline-state",
+                snapshot,
+            ))
             .await
+    }
+}
+
+/// A provider's resource read for a thread; `state` reaches the server under `state_key` in `_meta`.
+pub(crate) fn resource_read(
+    provider: &StatuslineProvider,
+    thread: ThreadId,
+    state_key: &str,
+    state: Value,
+) -> ClientRequest {
+    ClientRequest::McpResourceRead {
+        request_id: RequestId::String(Uuid::new_v4().to_string()),
+        params: McpResourceReadParams {
+            thread_id: Some(thread.to_string()),
+            server: provider.id.server.0.clone(),
+            environment_id: None,
+            uri: provider.uri.clone(),
+            connector_id: None,
+            origin_call_id: None,
+            target: None,
+            meta: Some(serde_json::Map::from_iter([(state_key.into(), state)])),
+        },
     }
 }
 

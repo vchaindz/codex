@@ -32,6 +32,9 @@ mod tests;
 use serde_json::Number;
 const MAX_SOURCE_BYTES: usize = 64 * 1024;
 const MAX_HEIGHT: u16 = 24;
+const MAX_TEXT_ROWS: u16 = 512;
+// Keys the document reader already uses: a provider cannot take them.
+const RESERVED_KEYS: &str = "hjklgGqvyonNdubf";
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
@@ -114,7 +117,10 @@ pub(super) fn parse(source: &str) -> Result<Block, String> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err("Sidebar panel exceeds 64 KiB".into());
     }
-    serde_json::from_str(source).map_err(|error| format!("Unreadable sidebar panel: {error}"))
+    let root: Block = serde_json::from_str(source)
+        .map_err(|error| format!("Unreadable sidebar panel: {error}"))?;
+    root.check_text()?;
+    Ok(root)
 }
 
 fn color(name: &Option<String>, fallback: Color) -> Color {
@@ -124,6 +130,21 @@ fn color(name: &Option<String>, fallback: Color) -> Color {
 }
 
 impl Block {
+    /// Styled text keeps the status line's limits, which the panel's own decoding would skip.
+    fn check_text(&self) -> Result<(), String> {
+        match self {
+            Self::Panel { children } | Self::Box { children, .. } => {
+                children.iter().try_for_each(Self::check_text)
+            }
+            Self::Text(node) => serde_json::to_string(node)
+                .map_err(|error| error.to_string())?
+                .parse::<UiTree>()
+                .map(drop)
+                .map_err(|error| format!("Unreadable sidebar panel text: {error}")),
+            _ => Ok(()),
+        }
+    }
+
     pub(super) fn actions(&self) -> Vec<PanelAction> {
         let mut found = Vec::new();
         self.collect_actions(&mut found);
@@ -143,12 +164,17 @@ impl Block {
                 tool,
                 arguments,
                 ..
-            } if !found.iter().any(|action| action.key == *key) => found.push(PanelAction {
-                key: *key,
-                prompt: prompt.clone(),
-                tool: tool.clone(),
-                arguments: arguments.clone(),
-            }),
+            } if key.is_ascii_alphanumeric()
+                && !RESERVED_KEYS.contains(*key)
+                && !found.iter().any(|action| action.key == *key) =>
+            {
+                found.push(PanelAction {
+                    key: *key,
+                    prompt: prompt.clone(),
+                    tool: tool.clone(),
+                    arguments: arguments.clone(),
+                })
+            }
             _ => {}
         }
     }
@@ -182,7 +208,8 @@ impl Block {
                 } else {
                     format!(" {title} ")
                 };
-                let rule = usize::from(width - 2).saturating_sub(label.chars().count() + 1);
+                let rule = usize::from(width - 2)
+                    .saturating_sub(unicode_width::UnicodeWidthStr::width(label.as_str()) + 1);
                 out.push(Line::from(vec![
                     Span::styled("╭─", edge),
                     Span::styled(label, edge.add_modifier(Modifier::BOLD)),
@@ -315,7 +342,7 @@ impl Block {
             ])),
             Self::Text(node) => {
                 let tree = UiTree(Some(node.clone())).prepare();
-                let size = tree.measure(Size::new(width, u16::MAX));
+                let size = tree.measure(Size::new(width, MAX_TEXT_ROWS));
                 let area = Rect::new(0, 0, size.width, size.height);
                 let mut buf = Buffer::empty(area);
                 crate::render::highlight::with_syntax_theme(|theme| {

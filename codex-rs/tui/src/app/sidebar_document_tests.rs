@@ -672,3 +672,28 @@ fn visible_sidebar_row(tui: &crate::tui::Tui, sidebar: Rect, row: u16) -> String
         .trim()
         .to_owned()
 }
+
+#[test]
+fn a_provider_tab_drops_old_keys_and_shows_unreadable_panels_as_markdown() {
+    let mut doc = Document {
+        source: ThreadId::new(),
+        path: PathUri::parse("file:///codex-mcp-sidebar/test").expect("path"),
+        backend: crate::backend_id::BackendId::new(),
+        link: None,
+        location: None,
+        state: State::Loading(Instant::now()),
+        label: Some("AgentMon".into()),
+        server: Some("agentmon".into()),
+        actions: Vec::new(),
+        _poll: None,
+    };
+    doc.loaded(Ok(DocumentContent::Text(
+        r#"{"type":"action","key":"i","label":"look","prompt":"p"}"#.into(),
+    )));
+    assert_eq!(doc.actions.len(), 1);
+    doc.loaded(Ok(DocumentContent::Text("{ not a panel".into())));
+    assert!(doc.actions.is_empty());
+    assert!(matches!(doc.state, State::Ready { .. }));
+    doc.loaded(Ok(DocumentContent::Text("x".repeat(1024 * 1024 + 1))));
+    assert!(matches!(doc.state, State::Failed(_)));
+}

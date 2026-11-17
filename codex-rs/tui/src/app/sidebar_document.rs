@@ -151,8 +151,9 @@ impl Document {
     }
 
     pub(super) fn loaded(&mut self, result: Result<DocumentContent, String>) {
-        self.state = match result {
-            Ok(DocumentContent::Image(image)) => State::Image(image),
+        // Keys belong to the panel on screen; anything else that arrives offers none.
+        self.actions.clear();
+        let result = match result {
             Ok(DocumentContent::Text(source))
                 if self.label.is_some() && source.trim_start().starts_with('{') =>
             {
@@ -164,22 +165,28 @@ impl Document {
                         let mut view = Box::<TranscriptView>::default();
                         view.show_follow_control = false;
                         view.jump_to_offset(&cells, 0);
-                        State::Ready {
+                        self.state = State::Ready {
                             view,
                             cells,
                             line_starts: Vec::new(),
                             target: None,
-                        }
+                        };
+                        return;
                     }
-                    Err(error) => State::Failed(error),
+                    // Not a panel after all: the text shows as Markdown.
+                    Err(_) => Ok(DocumentContent::Text(source)),
                 }
             }
+            other => other,
+        };
+        self.state = match result {
+            Ok(DocumentContent::Image(image)) => State::Image(image),
             Ok(DocumentContent::Text(source)) => {
                 let title = self.title();
                 let code = self.location.is_some()
                     || (self.label.is_none() && !crate::markdown_render::is_markdown_file(&title));
                 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
-                if code && source.len() > MAX_SOURCE_BYTES {
+                if (code || self.label.is_some()) && source.len() > MAX_SOURCE_BYTES {
                     self.state = State::Failed("Source preview limit is 1 MiB".into());
                     return;
                 }
@@ -214,7 +221,7 @@ impl Document {
                     .and_then(|loc| source_target(&source, &line_starts, loc));
                 let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(FileCell { source, language })];
                 let mut view = Box::<TranscriptView>::default();
-                view.document_links = true;
+                view.document_links = self.label.is_none();
                 view.show_follow_control = false;
                 view.jump_to_offset(&cells, target.map_or(0, |(_, offset)| offset));
                 State::Ready {
@@ -611,18 +618,19 @@ impl App {
         server: &AppServerSession,
         parent: ThreadId,
     ) {
-        if !self.config.features.enabled(Feature::TuiExtensionsSidebar)
-            || std::mem::replace(
-                &mut self
-                    .sidebars
-                    .entry(Some(parent))
-                    .or_default()
-                    .extensions_requested,
-                true,
-            )
+        const RETRY: Duration = Duration::from_secs(10);
+        if !self.config.features.enabled(Feature::TuiExtensionsSidebar) {
+            return;
+        }
+        let pane = self.sidebars.entry(Some(parent)).or_default();
+        if pane.extensions_found
+            || pane
+                .extensions_checked
+                .is_some_and(|checked| checked.elapsed() < RETRY)
         {
             return;
         }
+        pane.extensions_checked = Some(Instant::now());
         let client = server.request_handle();
         let backend_id = server.backend_id();
         let tx = self.app_event_tx.clone();
@@ -657,6 +665,9 @@ impl App {
         let Some(pane) = self.sidebars.get_mut(&Some(parent)) else {
             return;
         };
+        if std::mem::replace(&mut pane.extensions_found, true) {
+            return;
+        }
         let hidden = pane.visible_content().is_none();
         for provider in providers {
             let request = uuid::Uuid::new_v4();
@@ -705,9 +716,15 @@ impl App {
                             result: result.map(DocumentContent::Text),
                         });
                     }
+                    // A failing server is asked less often.
+                    let wait = if last.as_ref().is_some_and(Result::is_err) {
+                        5
+                    } else {
+                        1
+                    };
                     tokio::select! {
                         () = cancel.cancelled() => return,
-                        () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                        () = tokio::time::sleep(Duration::from_secs(wait)) => {}
                     }
                 }
             });

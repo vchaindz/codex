@@ -106,7 +106,9 @@ pub(super) struct SidebarPane {
     pub(super) showing_file_path: bool,
     pub(super) file_path_scroll: usize,
     pub(super) file_preview_unavailable: Option<&'static str>,
-    pub(super) extensions_requested: bool,
+    // Discovery retries while it finds nothing, since MCP servers may still be starting.
+    pub(super) extensions_checked: Option<std::time::Instant>,
+    pub(super) extensions_found: bool,
     pub(super) tabs_revision: usize,
     focus: Option<PaneFocus>,
     motion: PaneMotion,
