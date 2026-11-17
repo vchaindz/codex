@@ -64,6 +64,58 @@ impl HistoryCell for FileCell {
     }
 }
 
+/// A provider's styled tree, the format a status line provider sends, laid out at the sidebar's width.
+#[derive(Debug)]
+struct TreeCell {
+    source: String,
+    tree: crate::ui_tree::PreparedUiTree,
+}
+
+impl HistoryCell for TreeCell {
+    fn copy_source(&self) -> Option<&str> {
+        Some(&self.source)
+    }
+
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let size = self.tree.measure(ratatui::layout::Size::new(width, u16::MAX));
+        let area = ratatui::layout::Rect::new(0, 0, size.width, size.height);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::render::highlight::with_syntax_theme(|theme| {
+            self.tree.render(area, theme, &mut buf, /*plain_style*/ None);
+        });
+        (0..size.height)
+            .map(|y| {
+                let mut spans: Vec<ratatui::text::Span<'static>> = Vec::new();
+                let mut x = 0;
+                while x < size.width {
+                    let cell = &buf[(x, y)];
+                    let style = cell.style();
+                    // shortcut: a link cell carries its OSC 8 escape; keep its text and drop the link, make TreeCell a hyperlink cell if providers need clickable links.
+                    let symbol = crate::ui_tree::sanitize_leaf(cell.symbol().to_owned());
+                    // A wide symbol covers the cells after it.
+                    x += unicode_width::UnicodeWidthStr::width(symbol.as_str()).max(1) as u16;
+                    match spans.last_mut() {
+                        Some(span) if span.style == style => span.content.to_mut().push_str(&symbol),
+                        _ => spans.push(ratatui::text::Span::styled(symbol, style)),
+                    }
+                }
+                // The buffer is as wide as the widest line; shorter lines end in unpainted cells.
+                if let Some(last) = spans.last_mut()
+                    && last.style.bg.is_none_or(|bg| bg == ratatui::style::Color::Reset)
+                {
+                    let end = last.content.trim_end().len();
+                    last.content.to_mut().truncate(end);
+                }
+                Line::from(spans)
+            })
+            .collect()
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        crate::history_cell::raw_lines_from_source(&self.source)
+    }
+}
+
 pub(super) struct DocumentRenderOptions<'a> {
     pub(super) motion: MotionMode,
     pub(super) frames: &'a tui::FrameRequester,
@@ -150,6 +202,28 @@ impl Document {
     pub(super) fn loaded(&mut self, result: Result<DocumentContent, String>) {
         self.state = match result {
             Ok(DocumentContent::Image(image)) => State::Image(image),
+            Ok(DocumentContent::Text(source))
+                if self.label.is_some() && source.trim_start().starts_with('{') =>
+            {
+                match source.parse::<crate::ui_tree::UiTree>() {
+                    Ok(tree) => {
+                        let cells: [Arc<dyn HistoryCell>; 1] = [Arc::new(TreeCell {
+                            source,
+                            tree: tree.prepare(),
+                        })];
+                        let mut view = Box::<TranscriptView>::default();
+                        view.show_follow_control = false;
+                        view.jump_to_offset(&cells, 0);
+                        State::Ready {
+                            view,
+                            cells,
+                            line_starts: Vec::new(),
+                            target: None,
+                        }
+                    }
+                    Err(error) => State::Failed(format!("Unreadable sidebar tree: {error}")),
+                }
+            }
             Ok(DocumentContent::Text(source)) => {
                 let title = self.title();
                 let code = self.location.is_some()
@@ -586,7 +660,10 @@ impl App {
         parent: ThreadId,
     ) {
         if !self.config.features.enabled(Feature::TuiExtensionsSidebar)
-            || std::mem::replace(&mut self.sidebar_mut().extensions_requested, true)
+            || std::mem::replace(
+                &mut self.sidebars.entry(Some(parent)).or_default().extensions_requested,
+                true,
+            )
         {
             return;
         }
@@ -624,6 +701,7 @@ impl App {
         let Some(pane) = self.sidebars.get_mut(&Some(parent)) else {
             return;
         };
+        let hidden = pane.visible_content().is_none();
         for provider in providers {
             let request = uuid::Uuid::new_v4();
             // Never read as a file: the label names the tab and the resource fills it.
@@ -644,7 +722,11 @@ impl App {
                     _poll: Some(cancel.clone().drop_guard()),
                 },
             );
-            pane.add_document_tab(request);
+            if hidden {
+                pane.show(SidebarContent::Document(request), PaneFocus::Main);
+            } else {
+                pane.add_document_tab(request);
+            }
             let client = server.request_handle();
             let tx = self.app_event_tx.clone();
             tokio::spawn(async move {

@@ -38,6 +38,11 @@ impl App {
         app_server: &mut AppServerSession,
         event: AppEvent,
     ) -> Result<AppRunControl> {
+        if !self.reconnect.offline
+            && let Some(parent) = self.sidebar_parent()
+        {
+            self.refresh_sidebar_extensions(app_server, parent);
+        }
         let from_agents_overview = matches!(event, AppEvent::ForkAgentsOverviewThreadReady { .. });
         let event = if let AppEvent::ForkAgentsOverviewThreadReady { thread_id } = event {
             if self.current_displayed_thread_id() != Some(thread_id)

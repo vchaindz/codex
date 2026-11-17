@@ -672,3 +672,21 @@ fn visible_sidebar_row(tui: &crate::tui::Tui, sidebar: Rect, row: u16) -> String
         .trim()
         .to_owned()
 }
+
+#[test]
+fn a_labelled_tree_keeps_its_colours_lines_and_wide_symbols() {
+    let source = r#"{"type":"text","children":[{"type":"text","props":{"color":"red","weight":"bold"},"children":["● FAILED"]}," lint\n✓ ok ",{"type":"link","props":{"href":"http://127.0.0.1:1/"},"children":["web"]}]}"#;
+    let tree: crate::ui_tree::UiTree = source.parse().expect("tree");
+    let cell = TreeCell {
+        source: source.into(),
+        tree: tree.prepare(),
+    };
+    let lines = cell.display_lines(/*width*/ 40);
+    let text: Vec<String> = lines
+        .iter()
+        .map(|line| line.spans.iter().map(|span| span.content.as_ref()).collect())
+        .collect();
+    assert_eq!(text, ["● FAILED lint", "✓ ok web"]);
+    assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD));
+    assert_ne!(lines[0].spans[0].style, lines[0].spans[1].style);
+}
