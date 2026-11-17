@@ -545,6 +545,11 @@ pub(crate) enum AppEvent {
         request: uuid::Uuid,
         result: Result<crate::sidebar_image::DocumentContent, String>,
     },
+    SidebarExtensionsFound {
+        backend_id: crate::backend_id::BackendId,
+        parent: ThreadId,
+        providers: Vec<crate::statusline_provider::StatuslineProvider>,
+    },
     SidebarFilesLoaded {
         backend_id: crate::backend_id::BackendId,
         parent: ThreadId,

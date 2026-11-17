@@ -104,6 +104,7 @@ impl App {
                     | AppEvent::OpenSidebarDocument { .. }
                     | AppEvent::SidebarDocumentResolved { .. }
                     | AppEvent::SidebarDocumentLoaded { .. }
+                    | AppEvent::SidebarExtensionsFound { .. }
                     | AppEvent::SidebarFilesLoaded { .. }
                     | AppEvent::SavedSideChatsLoaded { .. }
                     | AppEvent::SideReplayFinished(_)
@@ -3690,6 +3691,9 @@ impl App {
                     doc.loaded(result);
                     tui.frame_requester().schedule_frame();
                 }
+            }
+            AppEvent::SidebarExtensionsFound { backend_id, parent, providers } => {
+                self.add_sidebar_extensions(tui, app_server, backend_id, parent, providers);
             }
             AppEvent::SidebarFilesLoaded { backend_id, parent, request, page } => {
                 if backend_id == app_server.backend_id()

@@ -75,6 +75,7 @@ impl App {
         {
             self.refresh_saved_chats(server, parent);
             self.refresh_sidebar_files(server, parent).await;
+            self.refresh_sidebar_extensions(server, parent);
         }
         tui.frame_requester().schedule_frame();
         Ok(())

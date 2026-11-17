@@ -3,6 +3,7 @@
 mod descriptor;
 pub(crate) mod discovery;
 mod inventory;
+pub(crate) mod sidebar;
 #[cfg(test)]
 pub(crate) mod test_support;
 

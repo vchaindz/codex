@@ -277,3 +277,15 @@ async fn selecting_a_plugin_requires_the_globally_advertised_tool_and_the_connec
     worker.await?;
     Ok(())
 }
+
+#[test]
+fn a_tool_can_offer_a_sidebar_beside_a_statusline() {
+    let entries =
+        json!([statusline("ui://demo/line"), {"type":"sidebar","resourceUri":"ui://demo/pane"}]);
+    let row = server(row("demo", vec![tool("both", entries)]));
+    let tool = row.tools.as_ref().unwrap().get("both").unwrap();
+    let pane = StatuslineProvider::from_tool_entrypoint(&row.name, None, tool, sidebar::ENTRYPOINT)
+        .unwrap();
+    assert_eq!(pane.uri, "ui://demo/pane");
+    assert_eq!(row.providers().unwrap()[0].uri, "ui://demo/line");
+}

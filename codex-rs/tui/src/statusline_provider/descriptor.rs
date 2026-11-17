@@ -24,11 +24,21 @@ impl StatuslineProvider {
         plugin_id: Option<&PluginId>,
         tool: &Tool,
     ) -> Option<Self> {
+        Self::from_tool_entrypoint(server, plugin_id, tool, "statusline")
+    }
+
+    /// The same contract serves every UI surface; `kind` names the entrypoint type.
+    pub(crate) fn from_tool_entrypoint(
+        server: &McpServerName,
+        plugin_id: Option<&PluginId>,
+        tool: &Tool,
+        kind: &str,
+    ) -> Option<Self> {
         let meta = tool.meta.as_ref()?;
         let entries = meta.get("openai/ui")?.get("entrypoints")?.as_array()?;
         let mut valid_uris = entries
             .iter()
-            .filter(|entry| entry["type"] == "statusline")
+            .filter(|entry| entry["type"] == kind)
             .filter_map(|entry| entry["resourceUri"].as_str())
             .filter(|uri| {
                 // The resource read forwards the original spelling. Reject errors the URL parser recovers from.
@@ -50,7 +60,8 @@ impl StatuslineProvider {
             tracing::warn!(
                 server = server.as_str(),
                 tool = tool.name.as_str(),
-                "ignoring MCP tool with multiple valid statusline entrypoints"
+                kind,
+                "ignoring MCP tool with multiple valid entrypoints of one type"
             );
             return None;
         }

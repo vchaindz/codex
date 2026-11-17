@@ -132,6 +132,8 @@ pub enum Feature {
     TuiWorkspace,
     /// Enable experimental MCP status line providers.
     TuiExtensionsStatusLine,
+    /// Enable experimental MCP sidebar providers.
+    TuiExtensionsSidebar,
     /// Enable negotiated zstd compression for app-server WebSocket and UDS connections.
     AppServerWebSocketCompression,
 
@@ -1174,6 +1176,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::TuiExtensionsStatusLine,
         key: "tui_extensions_statusline",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::TuiExtensionsSidebar,
+        key: "tui_extensions_sidebar",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

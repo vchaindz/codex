@@ -79,6 +79,10 @@ pub(super) struct Document {
     link: Option<usize>,
     location: Option<SourceLocation>,
     state: State,
+    /// Set for an MCP sidebar entrypoint: its tab name, and Markdown whatever the name says.
+    pub(super) label: Option<String>,
+    // Dropping the document stops its resource polling.
+    _poll: Option<tokio_util::sync::DropGuard>,
 }
 
 enum State {
@@ -132,7 +136,9 @@ impl Document {
     }
 
     fn title(&self) -> String {
-        self.path.basename().unwrap_or_default()
+        self.label
+            .clone()
+            .unwrap_or_else(|| self.path.basename().unwrap_or_default())
     }
 
     pub(super) fn connection_replaced(&mut self) {
@@ -146,8 +152,8 @@ impl Document {
             Ok(DocumentContent::Image(image)) => State::Image(image),
             Ok(DocumentContent::Text(source)) => {
                 let title = self.title();
-                let code =
-                    self.location.is_some() || !crate::markdown_render::is_markdown_file(&title);
+                let code = self.location.is_some()
+                    || (self.label.is_none() && !crate::markdown_render::is_markdown_file(&title));
                 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
                 if code && source.len() > MAX_SOURCE_BYTES {
                     self.state = State::Failed("Source preview limit is 1 MiB".into());
@@ -524,6 +530,8 @@ impl App {
                 link: None,
                 location,
                 state: State::Loading(Instant::now()),
+                label: None,
+                _poll: None,
             },
         );
         pane.add_document_tab(request);
@@ -570,6 +578,101 @@ impl App {
             });
         });
         Ok(())
+    }
+
+    pub(super) fn refresh_sidebar_extensions(
+        &mut self,
+        server: &AppServerSession,
+        parent: ThreadId,
+    ) {
+        if !self.config.features.enabled(Feature::TuiExtensionsSidebar)
+            || std::mem::replace(&mut self.sidebar_mut().extensions_requested, true)
+        {
+            return;
+        }
+        let client = server.request_handle();
+        let backend_id = server.backend_id();
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            match crate::statusline_provider::sidebar::discover(&client).await {
+                Ok(providers) if !providers.is_empty() => {
+                    tx.send(AppEvent::SidebarExtensionsFound {
+                        backend_id,
+                        parent,
+                        providers,
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!("sidebar provider discovery failed: {error:#}"),
+            }
+        });
+    }
+
+    /// Each provider gets a tab that rereads its resource every second until the tab closes.
+    // shortcut: a changed resource rebuilds the view and scrolls it to the top; keep the reading position if providers send long documents.
+    pub(super) fn add_sidebar_extensions(
+        &mut self,
+        tui: &mut tui::Tui,
+        server: &AppServerSession,
+        backend_id: crate::backend_id::BackendId,
+        parent: ThreadId,
+        providers: Vec<crate::statusline_provider::StatuslineProvider>,
+    ) {
+        if backend_id != server.backend_id() {
+            return;
+        }
+        let Some(pane) = self.sidebars.get_mut(&Some(parent)) else {
+            return;
+        };
+        for provider in providers {
+            let request = uuid::Uuid::new_v4();
+            // Never read as a file: the label names the tab and the resource fills it.
+            let Ok(path) = PathUri::parse(&format!("file:///codex-mcp-sidebar/{request}")) else {
+                continue;
+            };
+            let cancel = tokio_util::sync::CancellationToken::new();
+            pane.documents.insert(
+                request,
+                Document {
+                    source: parent,
+                    path,
+                    backend: backend_id,
+                    link: None,
+                    location: None,
+                    state: State::Loading(Instant::now()),
+                    label: Some(provider.title.clone()),
+                    _poll: Some(cancel.clone().drop_guard()),
+                },
+            );
+            pane.add_document_tab(request);
+            let client = server.request_handle();
+            let tx = self.app_event_tx.clone();
+            tokio::spawn(async move {
+                let mut last = None;
+                loop {
+                    let result = tokio::select! {
+                        () = cancel.cancelled() => return,
+                        read = crate::statusline_provider::sidebar::read(&client, parent, &provider) => {
+                            read.map_err(|error| format!("{error:#}"))
+                        }
+                    };
+                    if last.as_ref() != Some(&result) {
+                        last = Some(result.clone());
+                        tx.send(AppEvent::SidebarDocumentLoaded {
+                            backend_id,
+                            parent,
+                            request,
+                            result: result.map(DocumentContent::Text),
+                        });
+                    }
+                    tokio::select! {
+                        () = cancel.cancelled() => return,
+                        () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    }
+                }
+            });
+        }
+        tui.frame_requester().schedule_frame();
     }
 
     pub(super) async fn handle_document_input(

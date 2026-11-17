@@ -106,6 +106,7 @@ pub(super) struct SidebarPane {
     pub(super) showing_file_path: bool,
     pub(super) file_path_scroll: usize,
     pub(super) file_preview_unavailable: Option<&'static str>,
+    pub(super) extensions_requested: bool,
     pub(super) tabs_revision: usize,
     focus: Option<PaneFocus>,
     motion: PaneMotion,
@@ -317,6 +318,9 @@ impl SidebarPane {
         let Some(document) = self.documents.get(&id) else {
             return String::new();
         };
+        if let Some(label) = &document.label {
+            return crate::line_truncation::document_label(&[label.as_str()], width);
+        }
         let path = document.path.inferred_native_path_string();
         let parts: Vec<_> = path.rsplit(['/', '\\']).collect();
         let depth = self
