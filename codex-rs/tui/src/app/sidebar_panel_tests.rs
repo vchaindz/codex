@@ -170,3 +170,13 @@ fn a_pie_draws_a_disc_with_each_share_beside_it() {
         "{shown:?}"
     );
 }
+
+#[test]
+fn a_pie_takes_huge_values_and_keeps_its_labels_inside_the_panel() {
+    let shown = text(&render(
+        r#"{"type":"pie","height":3,"slices":[{"label":"a very long label that cannot fit","value":18446744073709551615},{"label":"b","value":18446744073709551615}]}"#,
+        20,
+    ));
+    assert!(shown.iter().all(|row| row.width() <= 20), "{shown:?}");
+    assert!(shown[1].ends_with("● b 50%"), "{shown:?}");
+}

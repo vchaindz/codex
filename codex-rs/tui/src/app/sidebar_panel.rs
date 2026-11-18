@@ -371,8 +371,9 @@ impl Block {
 /// A disc of `height` rows, its slices clockwise from the top, with each slice's share beside it.
 fn pie(slices: &[BarSpec], width: u16, height: u16, out: &mut Vec<HyperlinkLine>) {
     let slices = &slices[..slices.len().min(usize::from(MAX_HEIGHT))];
-    let total: u64 = slices.iter().map(|slice| slice.value).sum();
-    if total == 0 {
+    // Summed as floats: a provider's values can pass what an integer holds.
+    let total: f64 = slices.iter().map(|slice| slice.value as f64).sum();
+    if total == 0.0 {
         return;
     }
     // A braille dot is about as wide as it is tall, so a disc is twice as many cells across as down.
@@ -387,12 +388,12 @@ fn pie(slices: &[BarSpec], width: u16, height: u16, out: &mut Vec<HyperlinkLine>
                 continue;
             }
             let turn = x.atan2(y).rem_euclid(std::f64::consts::TAU) / std::f64::consts::TAU;
-            let mut upto = 0;
+            let mut upto = 0.0;
             let slice = slices
                 .iter()
                 .position(|slice| {
-                    upto += slice.value;
-                    turn < upto as f64 / total as f64
+                    upto += slice.value as f64;
+                    turn < upto / total
                 })
                 .unwrap_or(slices.len() - 1);
             points[slice].push((x, y));
@@ -417,12 +418,15 @@ fn pie(slices: &[BarSpec], width: u16, height: u16, out: &mut Vec<HyperlinkLine>
     rows.resize_with(rows.len().max(slices.len()), HyperlinkLine::default);
     for (row, slice) in rows.iter_mut().zip(slices) {
         let pad = usize::from(across).saturating_sub(row.width());
-        let share = slice.value as f64 / total as f64 * 100.0;
+        let share = slice.value as f64 / total * 100.0;
         let text = slice.text.clone().unwrap_or_else(|| format!("{share:.0}%"));
         row.line.spans.extend([
             Span::raw(" ".repeat(pad + 2)),
             Span::styled("● ", Style::default().fg(color(&slice.color, Color::Cyan))),
-            Span::raw(format!("{} {text}", slice.label)),
+            Span::raw(crate::line_truncation::document_label(
+                &[format!("{} {text}", slice.label).as_str()],
+                usize::from(width.saturating_sub(across + 4)),
+            )),
         ]);
     }
     out.extend(rows);
