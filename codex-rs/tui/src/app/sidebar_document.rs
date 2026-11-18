@@ -745,6 +745,14 @@ impl App {
             self.sidebar_mut()
                 .show(SidebarContent::Document(id), PaneFocus::Main);
         }
+        // Opened here: a provider's server runs without the desktop's environment.
+        if let Some(url) = action
+            .url
+            .as_deref()
+            .and_then(crate::terminal_hyperlinks::web_destination)
+        {
+            self.open_url_in_browser(url);
+        }
         let (Some(tool), Some(provider), Some(parent)) =
             (action.tool, provider, self.sidebar_parent())
         else {

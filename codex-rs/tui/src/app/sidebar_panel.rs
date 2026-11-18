@@ -87,6 +87,8 @@ pub(super) enum Block {
         tool: Option<String>,
         #[serde(default)]
         arguments: Option<serde_json::Value>,
+        #[serde(default)]
+        url: Option<String>,
     },
     #[serde(untagged)]
     Text(UiNode),
@@ -112,13 +114,14 @@ pub(super) struct Series {
     color: Option<String>,
 }
 
-/// A key the panel offers: it drafts `prompt` in the composer and calls `tool` on the provider's server.
+/// A key the panel offers: it drafts `prompt` in the composer, calls `tool` on the provider's server and opens `url` in the browser.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PanelAction {
     pub(super) key: char,
     pub(super) prompt: Option<String>,
     pub(super) tool: Option<String>,
     pub(super) arguments: Option<serde_json::Value>,
+    pub(super) url: Option<String>,
 }
 
 pub(super) fn parse(source: &str) -> Result<Block, String> {
@@ -171,6 +174,7 @@ impl Block {
                 prompt,
                 tool,
                 arguments,
+                url,
                 ..
             } if key.is_ascii_alphanumeric()
                 && !RESERVED_KEYS.contains(*key)
@@ -181,6 +185,7 @@ impl Block {
                     prompt: prompt.clone(),
                     tool: tool.clone(),
                     arguments: arguments.clone(),
+                    url: url.clone(),
                 })
             }
             _ => {}

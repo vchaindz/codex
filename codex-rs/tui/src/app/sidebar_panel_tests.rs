@@ -54,7 +54,7 @@ fn a_panel_frames_its_widgets_and_offers_each_key_once() {
         ]},
         {"type":"action","key":"i","label":"investigate","prompt":"look"},
         {"type":"action","key":"i","label":"again","tool":"dismiss"},
-        {"type":"action","key":"x","label":"dismiss","tool":"dismiss","arguments":{"key":"a"}}
+        {"type":"action","key":"x","label":"dismiss","tool":"dismiss","arguments":{"key":"a"},"url":"http://127.0.0.1:1/"}
     ]}"#;
     let root = parse(source).expect("panel");
     let mut rows = Vec::new();
@@ -84,13 +84,15 @@ fn a_panel_frames_its_widgets_and_offers_each_key_once() {
                 key: 'i',
                 prompt: Some("look".into()),
                 tool: None,
-                arguments: None
+                arguments: None,
+                url: None,
             },
             PanelAction {
                 key: 'x',
                 prompt: None,
                 tool: Some("dismiss".into()),
                 arguments: Some(serde_json::json!({"key": "a"})),
+                url: Some("http://127.0.0.1:1/".into()),
             },
         ]
     );
