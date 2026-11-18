@@ -15,6 +15,13 @@ fn text(lines: &[Line<'static>]) -> Vec<String> {
 }
 
 fn render(source: &str, width: u16) -> Vec<Line<'static>> {
+    render_links(source, width)
+        .into_iter()
+        .map(|row| row.line)
+        .collect()
+}
+
+fn render_links(source: &str, width: u16) -> Vec<HyperlinkLine> {
     let mut out = Vec::new();
     parse(source).expect("panel").lines(width, &mut out);
     out
@@ -50,8 +57,9 @@ fn a_panel_frames_its_widgets_and_offers_each_key_once() {
         {"type":"action","key":"x","label":"dismiss","tool":"dismiss","arguments":{"key":"a"}}
     ]}"#;
     let root = parse(source).expect("panel");
-    let mut lines = Vec::new();
-    root.lines(30, &mut lines);
+    let mut rows = Vec::new();
+    root.lines(30, &mut rows);
+    let lines: Vec<Line<'static>> = rows.into_iter().map(|row| row.line).collect();
     let shown = text(&lines);
     assert!(
         shown[0].starts_with("╭─ Limits ─") && shown[0].ends_with('╮'),
@@ -132,5 +140,33 @@ fn a_wide_box_title_keeps_the_border_inside_the_panel() {
         lines.iter().all(|line| line.width() <= 20),
         "{:?}",
         text(&lines)
+    );
+}
+
+#[test]
+fn a_boxed_link_stays_clickable_at_its_columns() {
+    let rows = render_links(
+        r#"{"type":"box","title":"t","children":[{"type":"text","children":["go ",{"type":"link","props":{"href":"http://127.0.0.1:1/"},"children":["web"]}]}]}"#,
+        20,
+    );
+    let link = &rows[1].hyperlinks[0];
+    assert_eq!(link.destination, "http://127.0.0.1:1/");
+    assert_eq!(link.columns, 5..8);
+}
+
+#[test]
+fn a_pie_draws_a_disc_with_each_share_beside_it() {
+    let shown = text(&render(
+        r#"{"type":"pie","height":3,"slices":[{"label":"model","value":3,"color":"cyan"},{"label":"shell","value":1}]}"#,
+        30,
+    ));
+    assert_eq!(shown.len(), 3);
+    assert!(shown[0].ends_with("● model 75%"), "{shown:?}");
+    assert!(shown[1].ends_with("● shell 25%"), "{shown:?}");
+    assert!(
+        shown
+            .iter()
+            .all(|row| row.chars().any(|ch| ('⠁'..='⣿').contains(&ch))),
+        "{shown:?}"
     );
 }
